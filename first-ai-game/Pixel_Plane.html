@@ -1,0 +1,640 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Pixel Plane — пиксельная мини-игра</title>
+<style>
+  :root {
+    --ink: #e8f4ff;
+    --dim: #9db7d8;
+    --muted: #6a86b3;
+    --accent: #4fc3ff;
+    --danger: #ff5d5d;
+    --bg: #070b16;
+  }
+
+  * { box-sizing: border-box; }
+
+  body {
+    margin: 0;
+    min-height: 100vh;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 18px;
+    background: radial-gradient(circle at 50% 0%, #16243c 0%, var(--bg) 60%);
+    color: var(--ink);
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Courier New", monospace;
+    user-select: none;
+    -webkit-user-select: none;
+    -webkit-tap-highlight-color: transparent;
+    overscroll-behavior: none;
+  }
+
+  .game-shell {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 12px;
+    margin: auto;
+  }
+
+  /* Рамка игры. Пропорции 2:3 — как у канвы 320x480. */
+  #game {
+    position: relative;
+    width: min(88vw, 56vh, 380px);
+    aspect-ratio: 2 / 3;
+    background: var(--bg);
+    box-shadow: 0 0 0 3px #2a4670, 0 0 0 6px #0a1221, 0 18px 44px rgba(0, 0, 0, .6);
+  }
+
+  /* Канва растягивается по рамке, но остаётся «пиксельной». */
+  canvas {
+    display: block;
+    width: 100%;
+    height: 100%;
+    image-rendering: pixelated;
+    touch-action: none;
+  }
+
+  /* Счёт поверх игрового поля. */
+  .hud {
+    position: absolute;
+    inset: 0 0 auto 0;
+    display: flex;
+    justify-content: space-between;
+    padding: 10px 12px 26px;
+    background: linear-gradient(180deg, rgba(7, 11, 22, .95) 0%, rgba(7, 11, 22, 0) 100%);
+    pointer-events: none;
+  }
+
+  .hud__block {
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+  }
+
+  .hud__block--right { align-items: flex-end; }
+
+  .hud__label {
+    font-size: 9px;
+    letter-spacing: .26em;
+    color: var(--muted);
+  }
+
+  .hud__value {
+    font-size: 19px;
+    font-weight: 700;
+    line-height: 1;
+    letter-spacing: .04em;
+    text-shadow: 0 2px 0 rgba(0, 0, 0, .55);
+  }
+
+  .hud__value--best { color: #ffd166; }
+
+  /* Экран старта и экран проигрыша. */
+  .overlay {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 10px;
+    padding: 24px 20px;
+    text-align: center;
+    background: rgba(6, 10, 20, .87);
+    animation: fade-in .18s ease-out;
+  }
+
+  .overlay[hidden] { display: none; }
+
+  @keyframes fade-in {
+    from { opacity: 0; }
+    to { opacity: 1; }
+  }
+
+  .overlay__tag {
+    margin: 0;
+    font-size: 9px;
+    letter-spacing: .3em;
+    text-transform: uppercase;
+    color: var(--muted);
+  }
+
+  .overlay__title {
+    margin: 0;
+    font-size: clamp(26px, 8vw, 36px);
+    line-height: 1.05;
+    letter-spacing: .04em;
+    text-shadow: 3px 3px 0 #14294a;
+  }
+
+  .overlay.is-over .overlay__title {
+    color: var(--danger);
+    text-shadow: 3px 3px 0 #3a0f16;
+  }
+
+  .overlay__text {
+    margin: 0;
+    max-width: 26ch;
+    font-size: 11px;
+    line-height: 1.7;
+    color: var(--dim);
+  }
+
+  .btn {
+    margin-top: 8px;
+    padding: 12px 26px;
+    border: 0;
+    border-radius: 2px;
+    font: inherit;
+    font-size: 13px;
+    font-weight: 700;
+    letter-spacing: .16em;
+    text-transform: uppercase;
+    color: #04121f;
+    background: var(--accent);
+    box-shadow: 0 4px 0 #1b6c96;
+    cursor: pointer;
+    transition: background .12s ease, transform .06s ease, box-shadow .06s ease;
+  }
+
+  .btn:hover { background: #6fd2ff; }
+  .btn:active { transform: translateY(3px); box-shadow: 0 1px 0 #1b6c96; }
+  .btn:focus-visible { outline: 2px solid var(--ink); outline-offset: 3px; }
+
+  .hint {
+    margin: 0;
+    max-width: 36ch;
+    font-size: 10px;
+    line-height: 1.7;
+    text-align: center;
+    color: var(--muted);
+  }
+
+  .hint b { color: var(--dim); }
+</style>
+</head>
+<body>
+  <main class="game-shell">
+    <div id="game">
+      <canvas id="canvas" width="320" height="480" aria-label="Игровое поле: пиксельный самолётик уклоняется от падающих глыб"></canvas>
+
+      <div class="hud">
+        <div class="hud__block">
+          <span class="hud__label">SCORE</span>
+          <span class="hud__value" id="score">000</span>
+        </div>
+        <div class="hud__block hud__block--right">
+          <span class="hud__label">BEST</span>
+          <span class="hud__value hud__value--best" id="best">000</span>
+        </div>
+      </div>
+
+      <div class="overlay" id="overlay" hidden>
+        <p class="overlay__tag" id="overlay-tag">2d pixel arcade</p>
+        <h1 class="overlay__title" id="overlay-title">PIXEL PLANE</h1>
+        <p class="overlay__text" id="overlay-text">Готов к полёту?</p>
+        <button class="btn" id="start-btn" type="button">НАЧАТЬ</button>
+      </div>
+    </div>
+
+    <p class="hint">
+      <b>← →</b> или <b>A / D</b> — движение · <b>Space</b> — старт и рестарт ·
+      мышь и тап тоже работают
+    </p>
+  </main>
+
+<script>
+(function () {
+  'use strict';
+
+  // --- Ссылки на элементы страницы ------------------------------------------
+  var canvas = document.getElementById('canvas');
+  var ctx = canvas.getContext('2d');
+  var W = canvas.width;   // 320
+  var H = canvas.height;  // 480
+
+  var overlay = document.getElementById('overlay');
+  var overlayTag = document.getElementById('overlay-tag');
+  var overlayTitle = document.getElementById('overlay-title');
+  var overlayText = document.getElementById('overlay-text');
+  var startBtn = document.getElementById('start-btn');
+  var scoreEl = document.getElementById('score');
+  var bestEl = document.getElementById('best');
+
+  // --- Настройки ------------------------------------------------------------
+  var PLAYER_SPEED = 270;         // скорость самолётика, px/сек
+  var PLAYER_START_Y = H - 104;   // высота полёта
+  var BASE_INTERVAL = 0.95;       // базовый интервал появления глыб, сек
+  var BASE_SPEED = 140;           // базовая скорость падения, px/сек
+  var BEST_KEY = 'pixel-plane-best';
+
+  // --- Пиксельные спрайты ---------------------------------------------------
+  // '#' — корпус, 'o' — кабина, 'w' — крылья, '.' — прозрачный пиксель
+  var PLANE_SPRITE = [
+    '....#....',
+    '...###...',
+    '...ooo...',
+    '.www#www.',
+    'wwww#wwww',
+    '.www#www.',
+    '...###...',
+    '..#####..',
+    '...###...'
+  ];
+  var PLANE_COLORS = { '#': '#e8f4ff', o: '#4fc3ff', w: '#8fc0f0' };
+  var PLANE_SCALE = 2;
+  var PLANE_W = PLANE_SPRITE[0].length * PLANE_SCALE;  // 18
+  var PLANE_H = PLANE_SPRITE.length * PLANE_SCALE;     // 18
+
+  var ROCK_STYLES = [
+    { dark: '#2a2440', base: '#57497a', light: '#8a7ab5' },
+    { dark: '#3a2018', base: '#8a4a2e', light: '#c47a4e' },
+    { dark: '#1b2a3c', base: '#3d5a79', light: '#6f93b8' }
+  ];
+
+  // --- Состояние игры -------------------------------------------------------
+  var player = { x: W / 2, y: PLAYER_START_Y };
+  var keys = { left: false, right: false };
+  var pointerTarget = null;
+  var obstacles = [];
+  var stars = [];
+  var state = 'ready';   // 'ready' | 'playing' | 'over'
+  var score = 0;
+  var best = loadBest();
+  var spawnTimer = 0;
+  var time = 0;
+  var lastFrame = 0;
+
+  // --- Мелкие помощники -----------------------------------------------------
+  function rand(min, max) {
+    return min + Math.random() * (max - min);
+  }
+
+  function randInt(min, max) {
+    return Math.floor(rand(min, max + 1));
+  }
+
+  function pick(list) {
+    return list[randInt(0, list.length - 1)];
+  }
+
+  function clamp(value, min, max) {
+    return value < min ? min : value > max ? max : value;
+  }
+
+  function loadBest() {
+    try {
+      var value = parseInt(localStorage.getItem(BEST_KEY), 10);
+      return Number.isFinite(value) && value > 0 ? value : 0;
+    } catch (error) {
+      return 0;
+    }
+  }
+
+  function saveBest(value) {
+    try {
+      localStorage.setItem(BEST_KEY, String(value));
+    } catch (error) {
+      /* localStorage может быть недоступен — на игру это не влияет */
+    }
+  }
+
+  function updateHud() {
+    scoreEl.textContent = String(score).padStart(3, '0');
+    bestEl.textContent = String(best).padStart(3, '0');
+  }
+
+  // --- Звёздный фон ---------------------------------------------------------
+  function createStars() {
+    stars = [];
+    for (var i = 0; i < 46; i++) {
+      var size = Math.random() < 0.8 ? 2 : 4;
+      var alpha = Math.round(rand(0.18, 0.75) * 100) / 100;
+      stars.push({
+        x: randInt(0, W - size),
+        y: randInt(0, H),
+        speed: rand(14, 58),
+        size: size,
+        color: 'rgba(180, 214, 255, ' + alpha + ')'
+      });
+    }
+  }
+
+  function updateStars(dt) {
+    for (var i = 0; i < stars.length; i++) {
+      var star = stars[i];
+      star.y += star.speed * dt;
+      if (star.y > H) {
+        star.y = -star.size;
+        star.x = randInt(0, W - star.size);
+      }
+    }
+  }
+
+  function renderStars() {
+    for (var i = 0; i < stars.length; i++) {
+      var star = stars[i];
+      ctx.fillStyle = star.color;
+      ctx.fillRect(Math.round(star.x), Math.round(star.y), star.size, star.size);
+    }
+  }
+
+  // --- Рисование спрайтов ---------------------------------------------------
+  function drawSprite(sprite, colors, left, top, scale) {
+    for (var row = 0; row < sprite.length; row++) {
+      var line = sprite[row];
+      for (var col = 0; col < line.length; col++) {
+        var color = colors[line[col]];
+        if (!color) continue;
+        ctx.fillStyle = color;
+        ctx.fillRect(left + col * scale, top + row * scale, scale, scale);
+      }
+    }
+  }
+
+  function drawPlane() {
+    var left = Math.round(player.x - PLANE_W / 2);
+    var top = Math.round(player.y);
+
+    // Дрожащее пламя двигателя: длина меняется три раза в секунду
+    var flame = 5 + (Math.floor(time * 14) % 3) * 3;
+    ctx.fillStyle = '#ff9f1c';
+    ctx.fillRect(left + 6, top + PLANE_H - 2, 6, flame);
+    ctx.fillStyle = '#ffe066';
+    ctx.fillRect(left + 7, top + PLANE_H - 2, 4, Math.max(2, flame - 4));
+
+    drawSprite(PLANE_SPRITE, PLANE_COLORS, left, top, PLANE_SCALE);
+  }
+
+  function drawObstacle(obstacle) {
+    var x = Math.round(obstacle.x);
+    var y = Math.round(obstacle.y);
+
+    // Тёмный контур
+    ctx.fillStyle = obstacle.style.dark;
+    ctx.fillRect(x, y, obstacle.w, obstacle.h);
+
+    // Основной блок
+    ctx.fillStyle = obstacle.style.base;
+    ctx.fillRect(x + 2, y + 2, obstacle.w - 4, obstacle.h - 4);
+
+    // Светлая кромка сверху и слева — объём
+    ctx.fillStyle = obstacle.style.light;
+    ctx.fillRect(x + 2, y + 2, obstacle.w - 4, 2);
+    ctx.fillRect(x + 2, y + 2, 2, obstacle.h - 4);
+
+    // Тёмные «кратеры»
+    ctx.fillStyle = obstacle.style.dark;
+    for (var i = 0; i < obstacle.craters.length; i++) {
+      var crater = obstacle.craters[i];
+      ctx.fillRect(x + crater.x, y + crater.y, crater.size, crater.size);
+    }
+  }
+
+  // --- Препятствия ----------------------------------------------------------
+  function spawnObstacle() {
+    var w = randInt(18, 26);
+    var h = randInt(18, 26);
+
+    var craters = [];
+    var craterCount = randInt(1, 2);
+    for (var i = 0; i < craterCount; i++) {
+      craters.push({
+        x: randInt(5, Math.max(5, w - 9)),
+        y: randInt(5, Math.max(5, h - 9)),
+        size: 4
+      });
+    }
+
+    obstacles.push({
+      x: rand(0, W - w),
+      y: -h - 6,
+      w: w,
+      h: h,
+      // Чем больше счёт, тем быстрее летят глыбы (но не бесконечно)
+      speed: (BASE_SPEED + Math.min(score * 6, 120)) * rand(0.85, 1.2),
+      style: pick(ROCK_STYLES),
+      craters: craters
+    });
+  }
+
+  function nextSpawnDelay() {
+    var base = Math.max(0.55, BASE_INTERVAL - score * 0.015);
+    return base * rand(0.85, 1.15);
+  }
+
+  // --- Движение игрока ------------------------------------------------------
+  function movePlayer(dt) {
+    var half = PLANE_W / 2;
+    var direction = (keys.right ? 1 : 0) - (keys.left ? 1 : 0);
+
+    if (direction !== 0) {
+      player.x += direction * PLAYER_SPEED * dt;
+      pointerTarget = null;
+    } else if (pointerTarget !== null) {
+      // Плавно тянемся к курсору или пальцу
+      player.x += (pointerTarget - player.x) * Math.min(1, dt * 14);
+    }
+
+    player.x = clamp(player.x, half, W - half);
+  }
+
+  // --- Столкновения ---------------------------------------------------------
+  function collides(obstacle) {
+    // Хитбокс самолётика чуть меньше спрайта, чтобы игра была не слишком злой
+    var px = player.x - 5;
+    var py = player.y + 4;
+    var pw = 10;
+    var ph = 12;
+
+    // У глыбы тоже срезаем пару пикселей по краям
+    var ox = obstacle.x + 3;
+    var oy = obstacle.y + 3;
+    var ow = obstacle.w - 6;
+    var oh = obstacle.h - 6;
+
+    return px < ox + ow && px + pw > ox && py < oy + oh && py + ph > oy;
+  }
+
+  // --- Логика кадра ---------------------------------------------------------
+  function update(dt) {
+    time += dt;
+    updateStars(dt);
+
+    if (state !== 'playing') return;
+
+    movePlayer(dt);
+
+    spawnTimer -= dt;
+    if (spawnTimer <= 0) {
+      spawnObstacle();
+      spawnTimer = nextSpawnDelay();
+    }
+
+    for (var i = obstacles.length - 1; i >= 0; i--) {
+      var obstacle = obstacles[i];
+      obstacle.y += obstacle.speed * dt;
+
+      // Глыба улетела за нижний край — плюс одно очко
+      if (obstacle.y > H) {
+        obstacles.splice(i, 1);
+        score += 1;
+        updateHud();
+        continue;
+      }
+
+      if (collides(obstacle)) {
+        endGame();
+        return;
+      }
+    }
+  }
+
+  function render() {
+    ctx.fillStyle = '#070b16';
+    ctx.fillRect(0, 0, W, H);
+
+    renderStars();
+
+    for (var i = 0; i < obstacles.length; i++) {
+      drawObstacle(obstacles[i]);
+    }
+
+    drawPlane();
+  }
+
+  // --- Экраны: старт, игра, проигрыш ---------------------------------------
+  function showOverlay(config) {
+    overlayTag.textContent = config.tag;
+    overlayTitle.textContent = config.title;
+    overlayText.textContent = config.text;
+    startBtn.textContent = config.button;
+    overlay.classList.toggle('is-over', Boolean(config.isOver));
+    overlay.hidden = false;
+  }
+
+  function startGame() {
+    if (state === 'playing') return;
+
+    state = 'playing';
+    score = 0;
+    obstacles = [];
+    spawnTimer = 0.35;
+    player.x = W / 2;
+    pointerTarget = null;
+    keys.left = false;
+    keys.right = false;
+
+    overlay.hidden = true;
+    startBtn.blur();
+    updateHud();
+  }
+
+  function endGame() {
+    state = 'over';
+
+    var isRecord = score > best;
+    if (isRecord) {
+      best = score;
+      saveBest(best);
+    }
+
+    updateHud();
+    showOverlay({
+      tag: isRecord ? 'новый рекорд' : 'результат',
+      title: 'GAME OVER',
+      text: isRecord ? 'СЧЁТ ' + score + ' · ЭТО НОВЫЙ РЕКОРД!' : 'СЧЁТ ' + score + ' · РЕКОРД ' + best,
+      button: 'ЗАНОВО',
+      isOver: true
+    });
+  }
+
+  // --- Управление -----------------------------------------------------------
+  window.addEventListener('keydown', function (event) {
+    if (event.code === 'ArrowLeft' || event.code === 'KeyA') {
+      keys.left = true;
+      pointerTarget = null;
+      event.preventDefault();
+    } else if (event.code === 'ArrowRight' || event.code === 'KeyD') {
+      keys.right = true;
+      pointerTarget = null;
+      event.preventDefault();
+    } else if (event.code === 'Space') {
+      // Пробел не должен прокручивать страницу
+      event.preventDefault();
+      if (state !== 'playing') startGame();
+    } else if (event.code === 'Enter') {
+      if (state !== 'playing') {
+        event.preventDefault();
+        startGame();
+      }
+    }
+  });
+
+  window.addEventListener('keyup', function (event) {
+    if (event.code === 'ArrowLeft' || event.code === 'KeyA') keys.left = false;
+    if (event.code === 'ArrowRight' || event.code === 'KeyD') keys.right = false;
+  });
+
+  // Если окно потеряло фокус, клавиши «залипнуть» не должны
+  window.addEventListener('blur', function () {
+    keys.left = false;
+    keys.right = false;
+  });
+
+  function pointerX(event) {
+    var rect = canvas.getBoundingClientRect();
+    var x = ((event.clientX - rect.left) / rect.width) * W;
+    return clamp(x, PLANE_W / 2, W - PLANE_W / 2);
+  }
+
+  canvas.addEventListener('pointerdown', function (event) {
+    pointerTarget = pointerX(event);
+  });
+
+  canvas.addEventListener('pointermove', function (event) {
+    if (state !== 'playing') return;
+    pointerTarget = pointerX(event);
+  });
+
+  // Клик по оверлею (в том числе по кнопке) начинает игру заново
+  overlay.addEventListener('click', function () {
+    startGame();
+  });
+
+  // --- Главный цикл ---------------------------------------------------------
+  function loop(now) {
+    if (!lastFrame) lastFrame = now;
+    var dt = (now - lastFrame) / 1000;
+    lastFrame = now;
+
+    // Защита от огромного шага после переключения вкладки
+    if (dt > 0.05) dt = 0.05;
+
+    update(dt);
+    render();
+    requestAnimationFrame(loop);
+  }
+
+  function init() {
+    createStars();
+    updateHud();
+    showOverlay({
+      tag: '2d pixel arcade',
+      title: 'PIXEL PLANE',
+      text: 'Веди самолётик стрелками ← → или мышью и уклоняйся от падающих глыб.',
+      button: 'НАЧАТЬ'
+    });
+    requestAnimationFrame(loop);
+  }
+
+  init();
+})();
+</script>
+</body>
+</html>
+
